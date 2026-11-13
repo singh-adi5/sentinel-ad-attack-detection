@@ -1,0 +1,40 @@
+// Name:        DCSync - directory replication requested by a non-domain-controller account
+// Purpose:     Find accounts that are not domain controllers using the directory
+//              replication extended rights, the trace left by Impacket
+//              secretsdump.py and Mimikatz lsadump::dcsync.
+// Data source: SecurityEvent (Windows Security Events via AMA), EventID 4662 on domain controllers,
+//              joined to EventID 4624 for the source address
+// ATT&CK:      T1003.006 (OS Credential Dumping: DCSync)
+// Fires when:  any account outside the domain controller and approved replication
+//              lists exercises a DS-Replication-Get-Changes* right in the last 15 minutes.
+// Matches the rule's queryFrequency. The longer queryPeriod only feeds the 4624 lookup.
+let detection_window = 15m;
+// Lower-case sAMAccountName of every domain controller. Keep this current.
+let domain_controllers = dynamic(["dc01$"]);
+// Lower-case sAMAccountNames that replicate by design, e.g. a directory sync service account.
+let approved_replication_accounts = dynamic([]);
+let get_changes = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2";
+let get_changes_all = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2";
+let get_changes_filtered = "89e95b76-444d-4c62-991a-0facbeda640c";
+let network_logons = SecurityEvent
+    | where EventID == 4624 and LogonType == 3
+    | summarize SourceIp = take_any(IpAddress) by Computer, TargetLogonId;
+SecurityEvent
+| where TimeGenerated > ago(detection_window)
+| where EventID == 4662 and ObjectServer == "DS"
+| where Properties has get_changes or Properties has get_changes_all or Properties has get_changes_filtered
+| extend Actor = tolower(SubjectUserName)
+| where Actor !in (domain_controllers)
+| where Actor !in (approved_replication_accounts)
+| extend ReplicationRight = case(
+    Properties has get_changes_all, "DS-Replication-Get-Changes-All",
+    Properties has get_changes_filtered, "DS-Replication-Get-Changes-In-Filtered-Set",
+    "DS-Replication-Get-Changes")
+| summarize
+    StartTime = min(TimeGenerated),
+    EndTime = max(TimeGenerated),
+    Operations = count(),
+    ReplicationRights = make_set(ReplicationRight)
+    by Computer, Actor, ActorDomain = SubjectDomainName, SubjectLogonId
+| join kind=leftouter network_logons on Computer, $left.SubjectLogonId == $right.TargetLogonId
+| project StartTime, EndTime, Computer, Actor, ActorDomain, SourceIp, Operations, ReplicationRights, SubjectLogonId

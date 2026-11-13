@@ -1,0 +1,33 @@
+# Columns of the SecurityEvent table used to analyse the queries offline.
+# One "name: type" per line. This is a subset of the real table: add a column
+# here only after confirming it exists in the Azure Monitor table reference.
+TimeGenerated: datetime
+Computer: string
+EventID: int
+Activity: string
+Account: string
+AccountType: string
+EventData: string
+TargetUserName: string
+TargetDomainName: string
+TargetAccount: string
+TargetLogonId: string
+SubjectUserName: string
+SubjectDomainName: string
+SubjectAccount: string
+SubjectLogonId: string
+SubjectUserSid: string
+IpAddress: string
+IpPort: string
+LogonType: int
+Status: string
+SubStatus: string
+ServiceName: string
+TicketEncryptionType: string
+TicketOptions: string
+ObjectServer: string
+ObjectName: string
+ObjectType: string
+Properties: string
+AccessMask: string
+WorkstationName: string

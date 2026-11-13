@@ -1,0 +1,48 @@
+// Name:        Password spraying - one source failing logons across many accounts
+// Purpose:     Find a single source address that fails authentication against many
+//              different accounts with few attempts per account, the shape of
+//              Kerbrute passwordspray and SMB/NTLM spraying tools.
+// Data source: SecurityEvent (Windows Security Events via AMA), EventID 4771 (Kerberos
+//              pre-authentication failed, status 0x18) and EventID 4625 (failed logon,
+//              bad password or unknown user)
+// ATT&CK:      T1110.003 (Brute Force: Password Spraying)
+// Fires when:  one source address fails against 10 or more distinct accounts inside
+//              the query period, averaging 5 or fewer attempts per account.
+let account_threshold = 10;
+let max_attempts_per_account = 5;
+// Addresses that legitimately authenticate many users, e.g. a VPN concentrator or web proxy.
+let excluded_sources = dynamic([]);
+let kerberos_failures = SecurityEvent
+    | where EventID == 4771
+    | extend
+        KrbStatus = iff(isnotempty(Status), Status, extract(@'"Status">([^<]*)<', 1, EventData)),
+        RawUser = iff(isnotempty(TargetUserName), TargetUserName, extract(@'"TargetUserName">([^<]*)<', 1, EventData)),
+        RawIp = iff(isnotempty(IpAddress), IpAddress, extract(@'"IpAddress">([^<]*)<', 1, EventData))
+    // 0x18 = KDC_ERR_PREAUTH_FAILED, the wrong-password result.
+    | where KrbStatus =~ "0x18"
+    | project TimeGenerated, Computer, EventID, RawUser, RawIp;
+let logon_failures = SecurityEvent
+    | where EventID == 4625
+    // 0xC000006A = wrong password, 0xC0000064 = no such user.
+    | where SubStatus in~ ("0xc000006a", "0xc0000064")
+    | project TimeGenerated, Computer, EventID, RawUser = TargetUserName, RawIp = IpAddress;
+union kerberos_failures, logon_failures
+| extend
+    TargetAccountName = tolower(tostring(split(RawUser, "@")[0])),
+    SourceIp = replace_string(RawIp, "::ffff:", "")
+| where isnotempty(TargetAccountName) and TargetAccountName !endswith "$"
+| where isnotempty(SourceIp) and SourceIp !in ("-", "::1", "127.0.0.1")
+| where SourceIp !in (excluded_sources)
+| summarize
+    StartTime = min(TimeGenerated),
+    EndTime = max(TimeGenerated),
+    TargetedAccounts = dcount(TargetAccountName),
+    FailedAttempts = count(),
+    Accounts = make_set(TargetAccountName, 100),
+    EventIds = make_set(EventID),
+    ReportingHosts = make_set(Computer, 10)
+    by SourceIp
+| where TargetedAccounts >= account_threshold
+| extend AttemptsPerAccount = round(todouble(FailedAttempts) / TargetedAccounts, 2)
+| where AttemptsPerAccount <= max_attempts_per_account
+| project StartTime, EndTime, SourceIp, TargetedAccounts, FailedAttempts, AttemptsPerAccount, Accounts, EventIds, ReportingHosts

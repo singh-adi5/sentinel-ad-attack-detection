@@ -1,0 +1,91 @@
+id: 942759af-7a79-4237-9294-c6d7f4ae8c8c
+name: Golden Ticket - service ticket issued with no matching TGT request
+description: |
+  A user account was granted a Kerberos service ticket (EventID 4769) from a source address where it
+  has no TGT issue (EventID 4768) or renewal (EventID 4770) in the previous twelve hours. A forged TGT
+  is never requested from the KDC, so this gap is the trace left by Mimikatz kerberos::golden, Rubeus
+  golden and Impacket ticketer.py. Needs Kerberos events from every domain controller. MITRE ATT&CK
+  T1558.001.
+severity: High
+requiredDataConnectors:
+  - connectorId: WindowsSecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+queryFrequency: 1h
+queryPeriod: 12h
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - CredentialAccess
+relevantTechniques:
+  - T1558.001
+query: |
+  // Name:        Golden Ticket - service ticket issued with no matching TGT request
+  // Purpose:     A forged TGT is never requested from the KDC, so the domain controller
+  //              logs service ticket requests (4769) for an account and source address
+  //              that have no TGT issue (4768) or renewal (4770) on record. This finds
+  //              that gap, the trace left by Mimikatz kerberos::golden, Rubeus golden
+  //              and Impacket ticketer.py.
+  // Data source: SecurityEvent (Windows Security Events via AMA), EventIDs 4768, 4769, 4770
+  //              from every domain controller in the domain
+  // ATT&CK:      T1558.001 (Steal or Forge Kerberos Tickets: Golden Ticket)
+  // Fires when:  a user account is granted a service ticket in the last hour from an
+  //              address where it has no TGT issue or renewal in the last 12 hours.
+  // Longer than the default 10 hour TGT lifetime. Raise it if the domain policy is longer.
+  let tgt_lookback = 12h;
+  let detection_window = 1h;
+  // Lower-case sAMAccountNames with a known reason to roam between addresses.
+  let excluded_accounts = dynamic([]);
+  let kerberos_events = SecurityEvent
+      | where TimeGenerated > ago(tgt_lookback)
+      | where EventID in (4768, 4769, 4770)
+      // Kerberos fields are read from the typed column when it is populated and from the raw event XML when it is not.
+      | extend
+          KrbStatus = iff(isnotempty(Status), Status, extract(@'"Status">([^<]*)<', 1, EventData)),
+          Service = iff(isnotempty(ServiceName), ServiceName, extract(@'"ServiceName">([^<]*)<', 1, EventData)),
+          RawUser = iff(isnotempty(TargetUserName), TargetUserName, extract(@'"TargetUserName">([^<]*)<', 1, EventData)),
+          RawIp = iff(isnotempty(IpAddress), IpAddress, extract(@'"IpAddress">([^<]*)<', 1, EventData))
+      | extend
+          AccountName = tolower(tostring(split(RawUser, "@")[0])),
+          SourceIp = replace_string(RawIp, "::ffff:", "")
+      // Machine accounts renew constantly and are out of scope for this rule.
+      | where isnotempty(AccountName) and AccountName !endswith "$";
+  let tgt_on_record = kerberos_events
+      | where EventID == 4770 or (EventID == 4768 and KrbStatus =~ "0x0")
+      | distinct AccountName, SourceIp;
+  kerberos_events
+  | where EventID == 4769 and TimeGenerated > ago(detection_window)
+  | where KrbStatus =~ "0x0"
+  | where Service !~ "krbtgt"
+  | where isnotempty(SourceIp) and SourceIp !in ("::1", "127.0.0.1")
+  | where AccountName !in (excluded_accounts)
+  | join kind=leftanti tgt_on_record on AccountName, SourceIp
+  | summarize
+      StartTime = min(TimeGenerated),
+      EndTime = max(TimeGenerated),
+      TicketRequests = count(),
+      Services = make_set(Service, 50)
+      by Computer, AccountName, SourceIp
+  | project StartTime, EndTime, Computer, AccountName, SourceIp, TicketRequests, Services
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: Name
+        columnName: AccountName
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: SourceIp
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
+customDetails:
+  TicketRequests: TicketRequests
+eventGroupingSettings:
+  aggregationKind: AlertPerResult
+version: 1.0.0
+kind: Scheduled

@@ -1,0 +1,24 @@
+# credentials and key material
+*.pem
+*.key
+*.pfx
+*.env
+.env*
+*.ccache
+*.kirbi
+*.hashes
+hashes.txt
+users.txt
+local.settings.json
+
+# generated deployment output
+sentinel-rules.arm.json
+dcr-securityevent.local.json
+
+# tooling
+.terraform/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+.DS_Store

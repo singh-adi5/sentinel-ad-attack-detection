@@ -1,0 +1,39 @@
+// Name:        Kerberoasting - RC4 service tickets requested for multiple SPNs
+// Purpose:     Find one account pulling RC4-encrypted service tickets for several
+//              user-backed SPNs in a short window, the pattern left by Rubeus
+//              kerberoast and Impacket GetUserSPNs.py.
+// Data source: SecurityEvent (Windows Security Events via AMA), EventID 4769 on domain controllers
+// ATT&CK:      T1558.003 (Steal or Forge Kerberos Tickets: Kerberoasting)
+// Fires when:  an account gets RC4 (0x17 / 0x18) tickets for 3 or more distinct
+//              non-machine SPNs from one source address inside the query period.
+let spn_threshold = 3;
+// Lower-case sAMAccountNames allowed to do this, e.g. an approved vulnerability scanner.
+let excluded_requesters = dynamic([]);
+SecurityEvent
+| where EventID == 4769
+// Kerberos fields are read from the typed column when it is populated and from the raw event XML when it is not.
+| extend
+    EncType = iff(isnotempty(TicketEncryptionType), TicketEncryptionType, extract(@'TicketEncryptionType">([^<]*)<', 1, EventData)),
+    KrbStatus = iff(isnotempty(Status), Status, extract(@'"Status">([^<]*)<', 1, EventData)),
+    Service = iff(isnotempty(ServiceName), ServiceName, extract(@'"ServiceName">([^<]*)<', 1, EventData)),
+    RawUser = iff(isnotempty(TargetUserName), TargetUserName, extract(@'"TargetUserName">([^<]*)<', 1, EventData)),
+    RawIp = iff(isnotempty(IpAddress), IpAddress, extract(@'"IpAddress">([^<]*)<', 1, EventData))
+| where KrbStatus =~ "0x0"
+| where EncType in~ ("0x17", "0x18")
+// Machine accounts and krbtgt are not crackable targets. Dropping them removes most RC4 noise.
+| where Service !endswith "$" and Service !~ "krbtgt"
+| extend
+    Requester = tolower(tostring(split(RawUser, "@")[0])),
+    SourceIp = replace_string(RawIp, "::ffff:", "")
+| where Requester !endswith "$"
+| where Requester != tolower(Service)
+| where Requester !in (excluded_requesters)
+| summarize
+    StartTime = min(TimeGenerated),
+    EndTime = max(TimeGenerated),
+    SpnCount = dcount(Service),
+    Services = make_set(Service, 50),
+    TicketRequests = count()
+    by Computer, Requester, SourceIp
+| where SpnCount >= spn_threshold
+| project StartTime, EndTime, Computer, Requester, SourceIp, SpnCount, TicketRequests, Services

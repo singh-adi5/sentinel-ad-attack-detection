@@ -1,0 +1,13 @@
+{
+  "name": "sentinel-ad-attack-detection",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Development tooling for the KQL syntax check. Not needed to use the detections.",
+  "license": "MIT",
+  "scripts": {
+    "kql-check": "node scripts/kql_check.js"
+  },
+  "devDependencies": {
+    "@kusto/language-service-next": "12.4.1"
+  }
+}

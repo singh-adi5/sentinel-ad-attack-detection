@@ -1,0 +1,32 @@
+{
+  "location": "<LOCATION>",
+  "kind": "Windows",
+  "properties": {
+    "description": "Forward the Security events the four AD detections need into the SecurityEvent table.",
+    "dataSources": {
+      "windowsEventLogs": [
+        {
+          "name": "adDetectionSecurityEvents",
+          "streams": ["Microsoft-SecurityEvent"],
+          "xPathQueries": [
+            "Security!*[System[(EventID=4624 or EventID=4625 or EventID=4662 or EventID=4768 or EventID=4769 or EventID=4770 or EventID=4771)]]"
+          ]
+        }
+      ]
+    },
+    "destinations": {
+      "logAnalytics": [
+        {
+          "name": "sentinelWorkspace",
+          "workspaceResourceId": "/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP>/providers/Microsoft.OperationalInsights/workspaces/<WORKSPACE_NAME>"
+        }
+      ]
+    },
+    "dataFlows": [
+      {
+        "streams": ["Microsoft-SecurityEvent"],
+        "destinations": ["sentinelWorkspace"]
+      }
+    ]
+  }
+}
